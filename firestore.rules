@@ -1,124 +1,123 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
     // ========================================
     // HELPERS - Fonctions utilitaires
     // ========================================
-    
+
     // Vérifie si l'utilisateur est authentifié
     function isAuthenticated() {
       return request.auth != null;
     }
-    
+
     // Vérifie si l'utilisateur est propriétaire du document
     function isOwner(userId) {
       return request.auth.uid == userId;
     }
-    
+
     // Vérifie si l'utilisateur est l'expéditeur du message
     function isSender() {
       return resource.data.senderId == request.auth.uid;
     }
-    
+
     // Vérifie si l'utilisateur peut lire le message
     function canReadMessage() {
       let deletedForUsers = resource.data.get('deletedForUsers', []);
       let isDeletedForEveryone = resource.data.get('isDeletedForEveryone', false);
       return !(request.auth.uid in deletedForUsers) && isDeletedForEveryone == false;
     }
-    
+
     // Vérifie si l'utilisateur est participant (pour conversations 1-1)
     function isParticipantInConversation(conversationId) {
       return conversationId.matches('.*' + request.auth.uid + '.*');
     }
-    
+
     // Vérifie si l'utilisateur est dans la liste des participants (pour groupes)
     function isInParticipantsList() {
       let participants = resource.data.get('participantIds', []);
       return request.auth.uid in participants;
     }
-    
+
     // Vérifie si l'utilisateur est membre du groupe
     function isGroupMember() {
       let members = resource.data.get('memberIds', []);
       return request.auth.uid in members;
     }
-    
+
     // Vérifie si l'utilisateur est admin du groupe
     function isGroupAdmin() {
       let admins = resource.data.get('adminIds', []);
       return request.auth.uid in admins;
     }
-    
+
     // Vérifie si l'utilisateur est créateur de la diffusion
     function isBroadcastCreator() {
       return resource.data.get('createdBy', '') == request.auth.uid;
     }
-    
+
     // Vérifie si seuls certains champs ont été modifiés
     function onlyAllowedFieldsChanged(allowedFields) {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowedFields);
     }
-    
+
     // Vérifie si la création de message est valide
     function isValidMessageCreate() {
       return request.resource.data.senderId == request.auth.uid &&
              request.resource.data.keys().hasAll(['content', 'senderId', 'senderName', 'timestamp', 'status', 'type']);
     }
-    
+
     // ========================================
     // RÈGLES POUR LES UTILISATEURS
     // ========================================
-    
+
     match /users/{userId} {
       allow read: if isAuthenticated();
-      
-      allow create: if isAuthenticated() && 
+
+      allow create: if isAuthenticated() &&
                        isOwner(userId) &&
                        request.resource.data.keys().hasAll(['displayName', 'email', 'isOnline']);
-      
-      allow update: if isAuthenticated() && 
+
+      allow update: if isAuthenticated() &&
                        isOwner(userId) &&
                        onlyAllowedFieldsChanged([
-                         'displayName', 'isOnline', 'lastSeen', 
-                         'fcmToken', 'typingIn', 'photoUrl', 
+                         'displayName', 'isOnline', 'lastSeen',
+                         'fcmToken', 'typingIn', 'photoUrl',
                          'status', 'notificationsEnabled', 'unreadCount'
                        ]);
-      
+
       allow delete: if isAuthenticated() && isOwner(userId);
     }
-    
+
     // ========================================
     // RÈGLES POUR LES CONVERSATIONS
     // ========================================
-    
+
     match /conversations/{conversationId} {
-      allow read: if isAuthenticated() && 
+      allow read: if isAuthenticated() &&
                      (isParticipantInConversation(conversationId) || isInParticipantsList());
-      
+
       allow create: if isAuthenticated();
-      
-      allow update: if isAuthenticated() && 
+
+      allow update: if isAuthenticated() &&
                        (isParticipantInConversation(conversationId) || isInParticipantsList()) &&
                        onlyAllowedFieldsChanged([
-                         'lastMessage', 'lastMessageTime', 
+                         'lastMessage', 'lastMessageTime',
                          'lastSenderId', 'unreadCounts',
                          'updatedAt', 'participantIds'
                        ]);
-      
+
       allow delete: if false;
-      
+
       match /messages/{messageId} {
-        allow read: if isAuthenticated() && 
-                       (isParticipantInConversation(conversationId) || isInParticipantsList()) &&
-                       canReadMessage();
-        
-        allow create: if isAuthenticated() && 
+        allow read: if isAuthenticated() &&
+                       (isParticipantInConversation(conversationId) || isInParticipantsList());
+
+        allow create: if isAuthenticated() &&
                          (isParticipantInConversation(conversationId) || isInParticipantsList()) &&
                          isValidMessageCreate();
-        
-        allow update: if isAuthenticated() && 
+
+        allow update: if isAuthenticated() &&
                          (isParticipantInConversation(conversationId) || isInParticipantsList()) && (
           onlyAllowedFieldsChanged(['deletedForUsers']) ||
           (isSender() && onlyAllowedFieldsChanged(['content', 'isEdited', 'editedAt', 'originalContent'])) ||
@@ -126,19 +125,19 @@ service cloud.firestore {
           (!isSender() && onlyAllowedFieldsChanged(['status', 'deliveredAt', 'readAt'])) ||
           onlyAllowedFieldsChanged(['reactions'])
         );
-        
-        allow delete: if isAuthenticated() && 
+
+        allow delete: if isAuthenticated() &&
                          (isParticipantInConversation(conversationId) || isInParticipantsList()) &&
                          isSender();
       }
     }
-    
+
     // ========================================
     // RÈGLES POUR LES GROUPES
     // ========================================
 
     match /groups/{groupId} {
-      // Permettre la lecture si l'utilisateur est membre (vérifié via la requête)
+      // Permettre la lecture si l'utilisateur est membre
       allow read: if isAuthenticated() && isGroupMember();
 
       allow create: if isAuthenticated() &&
@@ -158,15 +157,8 @@ service cloud.firestore {
           return request.auth.uid in groupData.memberIds;
         }
 
-        // Vérifie si le message peut être lu
-        function canReadGroupMessage() {
-          let deletedForUsers = resource.data.get('deletedForUsers', []);
-          let isDeletedForEveryone = resource.data.get('isDeletedForEveryone', false);
-          return !(request.auth.uid in deletedForUsers) && isDeletedForEveryone == false;
-        }
-
-        // Vérifie si l'utilisateur est l'expéditeur
-        function isMessageSender() {
+        // Vérifie si l'utilisateur est l'expéditeur du message
+        function isGroupMessageSender() {
           return resource.data.senderId == request.auth.uid;
         }
 
@@ -179,29 +171,29 @@ service cloud.firestore {
         allow update: if isAuthenticated() &&
                          isGroupMemberForMessage() && (
           onlyAllowedFieldsChanged(['deletedForUsers']) ||
-          (isMessageSender() && onlyAllowedFieldsChanged(['content', 'isEdited', 'editedAt', 'originalContent'])) ||
-          (isMessageSender() && onlyAllowedFieldsChanged(['isDeletedForEveryone', 'content', 'deletedAt'])) ||
-          (!isMessageSender() && onlyAllowedFieldsChanged(['status', 'deliveredAt', 'readAt'])) ||
+          (isGroupMessageSender() && onlyAllowedFieldsChanged(['content', 'isEdited', 'editedAt', 'originalContent'])) ||
+          (isGroupMessageSender() && onlyAllowedFieldsChanged(['isDeletedForEveryone', 'content', 'deletedAt'])) ||
+          (!isGroupMessageSender() && onlyAllowedFieldsChanged(['status', 'deliveredAt', 'readAt'])) ||
           onlyAllowedFieldsChanged(['reactions'])
         );
 
         allow delete: if isAuthenticated() &&
                          isGroupMemberForMessage() &&
-                         isMessageSender();
+                         isGroupMessageSender();
       }
     }
-    
+
     // ========================================
     // RÈGLES POUR LES LISTES DE DIFFUSION
     // ========================================
-    
+
     match /broadcasts/{broadcastId} {
       allow read: if isAuthenticated() && isBroadcastCreator();
-      
+
       allow create: if isAuthenticated();
-      
+
       allow update: if isAuthenticated() && isBroadcastCreator();
-      
+
       allow delete: if isAuthenticated() && isBroadcastCreator();
     }
   }

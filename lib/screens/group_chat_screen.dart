@@ -179,6 +179,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         otherUser: groupAsUser,
         isGroupChat: true,
         groupId: widget.group.id,
+        groupName: widget.group.name,
       ),
       child: Builder(
         builder: (context) {

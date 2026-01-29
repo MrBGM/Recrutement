@@ -17,6 +17,8 @@ class AIService {
     required List<Message> recentMessages,
     required String currentUserId,
     required String currentUserName,
+    bool isGroupChat = false,
+    String? groupName,
   }) async {
     try {
       // Essayer d'abord le backend
@@ -25,6 +27,8 @@ class AIService {
         recentMessages: recentMessages,
         currentUserId: currentUserId,
         currentUserName: currentUserName,
+        isGroupChat: isGroupChat,
+        groupName: groupName,
       );
       return result;
     } catch (e) {
@@ -38,6 +42,8 @@ class AIService {
           recentMessages: recentMessages,
           currentUserId: currentUserId,
           currentUserName: currentUserName,
+          isGroupChat: isGroupChat,
+          groupName: groupName,
         );
       }
 
@@ -53,6 +59,8 @@ class AIService {
     required List<Message> recentMessages,
     required String currentUserId,
     required String currentUserName,
+    bool isGroupChat = false,
+    String? groupName,
   }) async {
     final url = ApiConfig.suggestUrl;
     _debugLog('🌐 Appel backend: $url');
@@ -68,6 +76,8 @@ class AIService {
           .toList(),
       'currentUserId': currentUserId,
       'currentUserName': currentUserName,
+      'isGroupChat': isGroupChat,
+      'groupName': groupName,
     });
 
     _debugLog('📦 Messages envoyés: ${recentMessages.length}');
@@ -120,21 +130,31 @@ class AIService {
     required List<Message> recentMessages,
     required String currentUserId,
     required String currentUserName,
+    bool isGroupChat = false,
+    String? groupName,
   }) async {
     const baseUrl = 'https://api.groq.com/openai/v1/chat/completions';
     final mode = currentInput.isEmpty ? 'suggest' : 'improve';
 
-    _debugLog('🤖 Appel Groq direct - Mode: $mode');
+    _debugLog('🤖 Appel Groq direct - Mode: $mode, Groupe: $isGroupChat');
 
     // Analyser la conversation
     final analysis = _analyzeConversation(
       recentMessages,
       currentUserId,
       currentUserName,
+      isGroupChat: isGroupChat,
+      groupName: groupName,
     );
 
     // Construire les prompts
-    final systemPrompt = _buildSystemPrompt(mode, currentUserName, analysis);
+    final systemPrompt = _buildSystemPrompt(
+      mode,
+      currentUserName,
+      analysis,
+      isGroupChat: isGroupChat,
+      groupName: groupName,
+    );
     final userPrompt = _buildUserPrompt(
       mode,
       currentInput,
@@ -142,6 +162,8 @@ class AIService {
       currentUserId,
       currentUserName,
       analysis,
+      isGroupChat: isGroupChat,
+      groupName: groupName,
     );
 
     try {
@@ -211,10 +233,12 @@ class AIService {
   _ConversationAnalysis _analyzeConversation(
     List<Message> messages,
     String currentUserId,
-    String currentUserName,
-  ) {
+    String currentUserName, {
+    bool isGroupChat = false,
+    String? groupName,
+  }) {
     // Verifier le cache
-    final cacheKey = '${currentUserId}_${messages.length}';
+    final cacheKey = '${currentUserId}_${messages.length}_$isGroupChat';
     final cached = _analysisCache[cacheKey];
     if (cached != null &&
         DateTime.now().difference(cached.timestamp) < _cacheDuration) {
@@ -224,22 +248,38 @@ class AIService {
     if (messages.isEmpty) {
       return _ConversationAnalysis(
         tone: 'neutre',
-        relationship: 'inconnu',
+        relationship: isGroupChat ? 'groupe' : 'inconnu',
         topics: ['discussion generale'],
-        conversationSummary: 'Nouvelle conversation',
+        conversationSummary: isGroupChat
+            ? 'Nouvelle conversation de groupe'
+            : 'Nouvelle conversation',
         messageCount: 0,
         lastSpeaker: '',
         conversationFlow: 'debut',
         emotionalTone: 'neutre',
+        participants: [],
+        isGroupChat: isGroupChat,
+        groupName: groupName,
       );
     }
 
+    // Identifier les participants uniques
+    final participants = _identifyParticipants(messages, currentUserId);
+
     final tone = _detectTone(messages);
-    final relationship = _detectRelationship(messages, tone);
+    final relationship = isGroupChat
+        ? _detectGroupRelationship(messages, participants)
+        : _detectRelationship(messages, tone);
     final topics = _extractTopics(messages);
     final emotionalTone = _detectEmotionalTone(messages);
     final conversationFlow = _analyzeConversationFlow(messages, currentUserId);
-    final summary = _createConversationSummary(messages, currentUserId, topics);
+    final summary = _createConversationSummary(
+      messages,
+      currentUserId,
+      topics,
+      isGroupChat: isGroupChat,
+      participants: participants,
+    );
 
     final lastMessage = messages.last;
     final lastSpeaker =
@@ -254,12 +294,27 @@ class AIService {
       lastSpeaker: lastSpeaker,
       conversationFlow: conversationFlow,
       emotionalTone: emotionalTone,
+      participants: participants,
+      isGroupChat: isGroupChat,
+      groupName: groupName,
     );
 
     // Mettre en cache
     _analysisCache[cacheKey] = _CachedAnalysis(analysis, DateTime.now());
 
     return analysis;
+  }
+
+  /// Identifie les participants uniques dans une conversation
+  List<String> _identifyParticipants(
+      List<Message> messages, String currentUserId) {
+    final participants = <String>{};
+    for (final msg in messages) {
+      if (msg.senderId != currentUserId) {
+        participants.add(msg.senderName);
+      }
+    }
+    return participants.toList();
   }
 
   String _detectTone(List<Message> messages) {
@@ -322,6 +377,30 @@ class AIService {
     return 'ami';
   }
 
+  /// Detecte le type de relation dans un groupe
+  String _detectGroupRelationship(
+      List<Message> messages, List<String> participants) {
+    final content = messages.map((m) => m.content.toLowerCase()).join(' ');
+
+    if (RegExp(r'\b(travail|projet|réunion|bureau|deadline|task)\b')
+        .hasMatch(content)) {
+      return 'groupe_travail';
+    }
+    if (RegExp(r'\b(famille|fête|anniversaire|noel|vacances)\b')
+        .hasMatch(content)) {
+      return 'groupe_famille';
+    }
+    if (RegExp(r'\b(sortie|soirée|bar|restaurant|ciné|match)\b')
+        .hasMatch(content)) {
+      return 'groupe_amis';
+    }
+    if (participants.length > 5) {
+      return 'grand_groupe';
+    }
+
+    return 'groupe_mixte';
+  }
+
   List<String> _extractTopics(List<Message> messages) {
     final topics = <String>[];
     final content = messages.map((m) => m.content.toLowerCase()).join(' ');
@@ -346,6 +425,14 @@ class AIService {
       'loisirs': ['film', 'série', 'jeu', 'sport', 'musique', 'concert'],
       'nourriture': ['manger', 'restaurant', 'bouffe', 'dîner', 'déjeuner'],
       'voyage': ['voyage', 'vacances', 'partir', 'destination', 'avion'],
+      'organisation': [
+        'organiser',
+        'planifier',
+        'prévoir',
+        'quand',
+        'où',
+        'qui'
+      ],
     };
 
     topicKeywords.forEach((topic, keywords) {
@@ -433,19 +520,39 @@ class AIService {
   }
 
   String _createConversationSummary(
-      List<Message> messages, String currentUserId, List<String> topics) {
-    if (messages.isEmpty) return 'Nouvelle conversation';
+    List<Message> messages,
+    String currentUserId,
+    List<String> topics, {
+    bool isGroupChat = false,
+    List<String>? participants,
+  }) {
+    if (messages.isEmpty) {
+      return isGroupChat
+          ? 'Nouvelle conversation de groupe'
+          : 'Nouvelle conversation';
+    }
 
     final otherMessages =
         messages.where((m) => m.senderId != currentUserId).toList();
     String summary = '';
 
-    if (messages.length <= 3) {
-      summary = 'Debut de conversation';
-    } else if (messages.length <= 10) {
-      summary = 'Conversation en cours';
+    if (isGroupChat) {
+      final participantCount = participants?.length ?? 0;
+      if (messages.length <= 3) {
+        summary = 'Debut de discussion de groupe ($participantCount participants)';
+      } else if (messages.length <= 10) {
+        summary = 'Discussion de groupe en cours';
+      } else {
+        summary = 'Discussion de groupe active';
+      }
     } else {
-      summary = 'Discussion active';
+      if (messages.length <= 3) {
+        summary = 'Debut de conversation';
+      } else if (messages.length <= 10) {
+        summary = 'Conversation en cours';
+      } else {
+        summary = 'Discussion active';
+      }
     }
 
     if (topics.isNotEmpty && topics[0] != 'discussion generale') {
@@ -463,19 +570,39 @@ class AIService {
   }
 
   String _buildSystemPrompt(
-      String mode, String userName, _ConversationAnalysis analysis) {
-    final base =
-        '''Tu es un assistant IA conversationnel expert qui aide $userName a communiquer efficacement.
+    String mode,
+    String userName,
+    _ConversationAnalysis analysis, {
+    bool isGroupChat = false,
+    String? groupName,
+  }) {
+    final contextType = isGroupChat
+        ? 'GROUPE${groupName != null ? " ($groupName)" : ""}'
+        : 'CONVERSATION 1-1';
 
-CONTEXTE DE LA CONVERSATION:
+    final participantsInfo = isGroupChat && analysis.participants.isNotEmpty
+        ? '\n- Participants: ${analysis.participants.join(", ")}'
+        : '';
+
+    final base = '''Tu es un assistant IA conversationnel expert qui aide $userName a communiquer efficacement.
+
+TYPE DE CONVERSATION: $contextType
+CONTEXTE:
 - Ton general: ${analysis.tone}
 - Type de relation: ${analysis.relationship}
 - Sujets abordes: ${analysis.topics.join(', ')}
 - Resume: ${analysis.conversationSummary}
 - Ton emotionnel: ${analysis.emotionalTone}
-- Flux: ${analysis.conversationFlow}''';
+- Flux: ${analysis.conversationFlow}$participantsInfo''';
 
     if (mode == 'suggest') {
+      final groupSpecificRules = isGroupChat
+          ? '''
+- Dans un groupe, adresse-toi a tous ou mentionne des personnes specifiques si pertinent
+- Evite les messages trop personnels dans un groupe
+- Favorise l'engagement collectif'''
+          : '';
+
       return '''$base
 
 MISSION - SUGGESTION DE REPONSE:
@@ -488,7 +615,7 @@ REGLES ABSOLUES:
 - Langage naturel et humain
 - En francais
 - Ne dis JAMAIS "En tant qu'assistant..." ou similaire
-- Adapte le ton: ${analysis.tone == 'informel' ? 'court et direct' : 'complet mais concis'}''';
+- Adapte le ton: ${analysis.tone == 'informel' ? 'court et direct' : 'complet mais concis'}$groupSpecificRules''';
     }
 
     return '''$base
@@ -510,24 +637,37 @@ REGLES ABSOLUES:
     List<Message> messages,
     String currentUserId,
     String currentUserName,
-    _ConversationAnalysis analysis,
-  ) {
-    final contextMessages =
-        _buildStructuredContext(messages, currentUserId, currentUserName);
+    _ConversationAnalysis analysis, {
+    bool isGroupChat = false,
+    String? groupName,
+  }) {
+    final contextMessages = _buildStructuredContext(
+      messages,
+      currentUserId,
+      currentUserName,
+      isGroupChat: isGroupChat,
+    );
 
     if (mode == 'suggest') {
       final otherMessages =
           messages.where((m) => m.senderId != currentUserId).toList();
 
       if (otherMessages.isEmpty) {
+        final startMessage = isGroupChat
+            ? 'Propose un message pour que $currentUserName ${messages.isEmpty ? 'demarre' : 'relance'} la discussion dans ce groupe.'
+            : 'Propose un message pour que $currentUserName ${messages.isEmpty ? 'demarre' : 'relance'} cette conversation.';
+
         return '''HISTORIQUE:
 $contextMessages
 
 MISSION:
-Propose un message pour que $currentUserName ${messages.isEmpty ? 'demarre' : 'relance'} cette conversation.''';
+$startMessage''';
       }
 
       final lastOther = otherMessages.last;
+      final replyTo = isGroupChat
+          ? 'Genere UNE reponse parfaite que $currentUserName peut envoyer au groupe (en repondant notamment a ${lastOther.senderName}).'
+          : 'Genere UNE reponse parfaite que $currentUserName peut envoyer a ${lastOther.senderName}.';
 
       return '''HISTORIQUE:
 $contextMessages
@@ -538,7 +678,7 @@ DERNIER MESSAGE:
 ${lastOther.senderName}: "${lastOther.content}"
 
 MISSION:
-Genere UNE reponse parfaite que $currentUserName peut envoyer a ${lastOther.senderName}.''';
+$replyTo''';
     }
 
     return '''CONTEXTE:
@@ -554,8 +694,16 @@ Ameliore ce brouillon en gardant le meme sens.''';
   }
 
   String _buildStructuredContext(
-      List<Message> messages, String currentUserId, String currentUserName) {
-    if (messages.isEmpty) return '[Nouvelle conversation]';
+    List<Message> messages,
+    String currentUserId,
+    String currentUserName, {
+    bool isGroupChat = false,
+  }) {
+    if (messages.isEmpty) {
+      return isGroupChat
+          ? '[Nouvelle conversation de groupe]'
+          : '[Nouvelle conversation]';
+    }
 
     final lines = <String>[];
 
@@ -593,6 +741,9 @@ class _ConversationAnalysis {
   final String lastSpeaker;
   final String conversationFlow;
   final String emotionalTone;
+  final List<String> participants;
+  final bool isGroupChat;
+  final String? groupName;
 
   _ConversationAnalysis({
     required this.tone,
@@ -603,6 +754,9 @@ class _ConversationAnalysis {
     required this.lastSpeaker,
     required this.conversationFlow,
     required this.emotionalTone,
+    required this.participants,
+    required this.isGroupChat,
+    this.groupName,
   });
 }
 

@@ -15,23 +15,26 @@ class ChatProvider extends ChangeNotifier {
   final String _conversationId;
   final bool _isGroupChat;
   final String? _groupId;
+  final String? _groupName;
   List<Message> _messages = [];
   bool _isLoading = false;
   bool _isAILoading = false;
   String? _error;
 
-  /// Crée un provider pour une conversation entre deux utilisateurs
+  /// Crée un provider pour une conversation entre deux utilisateurs ou un groupe
   ChatProvider({
     required String currentUserId,
     required String currentUserName,
     required AppUser otherUser,
     bool isGroupChat = false,
     String? groupId,
+    String? groupName,
   })  : _currentUserId = currentUserId,
         _currentUserName = currentUserName,
         _otherUser = otherUser,
         _isGroupChat = isGroupChat,
         _groupId = groupId,
+        _groupName = groupName,
         _conversationId = isGroupChat && groupId != null
             ? groupId
             : FirestoreService().getConversationId(currentUserId, otherUser.id);
@@ -110,6 +113,8 @@ class ChatProvider extends ChangeNotifier {
         recentMessages: recentMessages,
         currentUserId: _currentUserId,
         currentUserName: _currentUserName,
+        isGroupChat: _isGroupChat,
+        groupName: _groupName,
       );
 
       // Insère la suggestion dans le champ

@@ -26,12 +26,98 @@ function handleCors(req: functions.https.Request, res: functions.Response): bool
     res.status(204).send('');
     return true;
   }
-  
+
   return false;
 }
 
 // ========================================
-// 1. NOTIFICATION NOUVEAU MESSAGE
+// HELPER - ENVOI DE NOTIFICATION
+// ========================================
+
+async function sendNotificationToUser(
+  userId: string,
+  senderId: string,
+  senderName: string,
+  content: string,
+  conversationId: string,
+  messageId: string,
+  isGroup: boolean = false,
+  groupName?: string
+): Promise<void> {
+  const userRef = admin.firestore().collection('users').doc(userId);
+  const userDoc = await userRef.get();
+
+  if (!userDoc.exists) return;
+
+  const userData = userDoc.data();
+
+  // Vérifier les préférences
+  if (userData?.notificationsEnabled === false) return;
+
+  const fcmToken = userData?.fcmToken;
+  if (!fcmToken) return;
+
+  // Construire le titre de la notification
+  const title = isGroup && groupName
+    ? `${senderName} dans ${groupName}`
+    : senderName || 'Nouveau message';
+
+  // Construire le contenu
+  const body = content?.length > 100
+    ? `${content.substring(0, 100)}...`
+    : content || '';
+
+  const notification: admin.messaging.Message = {
+    token: fcmToken,
+    notification: {
+      title,
+      body,
+    },
+    data: {
+      type: isGroup ? 'group_message' : 'new_message',
+      conversationId,
+      messageId,
+      senderId,
+      senderName,
+      ...(isGroup && groupName ? { groupName } : {}),
+      click_action: 'FLUTTER_NOTIFICATION_CLICK'
+    },
+    webpush: {
+      fcmOptions: {
+        link: `https://ai-chat-23aa5.web.app/?conversation=${conversationId}`
+      }
+    },
+    android: {
+      priority: 'high'
+    },
+    apns: {
+      payload: {
+        aps: {
+          sound: 'default',
+          badge: 1
+        }
+      }
+    }
+  };
+
+  try {
+    await admin.messaging().send(notification);
+    console.log(`✅ Notification envoyée à ${userId}`);
+  } catch (error: any) {
+    console.error(`❌ Erreur pour ${userId}:`, error.message);
+
+    // Nettoyer les tokens invalides
+    if (error.code === 'messaging/invalid-registration-token' ||
+        error.code === 'messaging/registration-token-not-registered') {
+      await userRef.update({
+        fcmToken: admin.firestore.FieldValue.delete()
+      });
+    }
+  }
+}
+
+// ========================================
+// 1. NOTIFICATION NOUVEAU MESSAGE (1-1)
 // ========================================
 
 export const onMessageCreated = functions.firestore
@@ -42,24 +128,19 @@ export const onMessageCreated = functions.firestore
       const { conversationId } = context.params;
 
       // Ignorer si message supprimé
-      if (message.isDeletedForEveryone || 
+      if (message.isDeletedForEveryone ||
           (message.deletedForUsers && message.deletedForUsers.length > 0)) {
         return null;
       }
+
+      console.log(`📬 Nouveau message dans conversation: ${conversationId}`);
 
       // Récupérer la conversation
       const conversationRef = admin.firestore()
         .collection('conversations')
         .doc(conversationId);
-      
-      const conversationDoc = await conversationRef.get();
-      
-      if (!conversationDoc.exists) {
-        console.log(`Conversation ${conversationId} non trouvée`);
-        return null;
-      }
 
-      const conversation = conversationDoc.data();
+      const conversationDoc = await conversationRef.get();
 
       // ✅ Déterminer les participants
       let participants: string[] = [];
@@ -69,20 +150,10 @@ export const onMessageCreated = functions.firestore
         participants = conversationId.split('_');
       }
       // Pour groupes (avec participantIds dans la conversation)
-      else if (conversation?.participantIds) {
-        participants = conversation.participantIds;
-      }
-      // Pour groupes (vérifier dans la collection groups si c'est un message de groupe)
-      else if (message.isGroupMessage && message.groupId) {
-        const groupDoc = await admin.firestore()
-          .collection('groups')
-          .doc(message.groupId)
-          .get();
-
-        if (groupDoc.exists) {
-          const groupData = groupDoc.data();
-          participants = groupData?.memberIds || [];
-          console.log(`📱 Groupe trouvé: ${message.groupId}, ${participants.length} membres`);
+      else if (conversationDoc.exists) {
+        const conversation = conversationDoc.data();
+        if (conversation?.participantIds) {
+          participants = conversation.participantIds;
         }
       }
 
@@ -93,85 +164,36 @@ export const onMessageCreated = functions.firestore
       const batch = admin.firestore().batch();
 
       for (const recipientId of recipients) {
-        // Récupérer l'utilisateur
-        const userRef = admin.firestore().collection('users').doc(recipientId);
-        const userDoc = await userRef.get();
-
-        if (!userDoc.exists) continue;
-
-        const userData = userDoc.data();
-        
-        // Vérifier les préférences
-        if (userData?.notificationsEnabled === false) continue;
-        
-        const fcmToken = userData?.fcmToken;
-        if (!fcmToken) continue;
-
         // Envoyer notification
-        const notification: admin.messaging.Message = {
-          token: fcmToken,
-          notification: {
-            title: message.senderName || 'Nouveau message',
-            body: message.content?.length > 100 
-              ? `${message.content.substring(0, 100)}...`
-              : message.content || '',
-          },
-          data: {
-            type: 'new_message',
-            conversationId,
-            messageId: snapshot.id,
-            senderId: message.senderId,
-            senderName: message.senderName,
-            click_action: 'FLUTTER_NOTIFICATION_CLICK'
-          },
-          webpush: {
-            fcmOptions: {
-              link: `https://ai-chat-23aa5.web.app/?conversation=${conversationId}`
-            }
-          },
-          android: {
-            priority: 'high'
-          },
-          apns: {
-            payload: {
-              aps: {
-                sound: 'default',
-                badge: 1
-              }
-            }
-          }
-        };
+        await sendNotificationToUser(
+          recipientId,
+          message.senderId,
+          message.senderName,
+          message.content,
+          conversationId,
+          snapshot.id,
+          false
+        );
 
-        try {
-          await admin.messaging().send(notification);
-          console.log(`✅ Notification envoyée à ${recipientId}`);
-        } catch (error: any) {
-          console.error(`❌ Erreur pour ${recipientId}:`, error.message);
-          
-          // Nettoyer les tokens invalides
-          if (error.code === 'messaging/invalid-registration-token' ||
-              error.code === 'messaging/registration-token-not-registered') {
-            await userRef.update({
-              fcmToken: admin.firestore.FieldValue.delete()
-            });
-          }
+        // Incrémenter compteur non lu (seulement si conversation existe)
+        if (conversationDoc.exists) {
+          batch.update(conversationRef, {
+            [`unreadCounts.${recipientId}`]: admin.firestore.FieldValue.increment(1)
+          });
         }
+      }
 
-        // Incrémenter compteur non lu
+      // Mettre à jour dernière activité (seulement si conversation existe)
+      if (conversationDoc.exists) {
         batch.update(conversationRef, {
-          [`unreadCounts.${recipientId}`]: admin.firestore.FieldValue.increment(1)
+          lastMessage: message.content,
+          lastMessageTime: admin.firestore.FieldValue.serverTimestamp(),
+          lastSenderId: message.senderId
         });
       }
 
-      // Mettre à jour dernière activité
-      batch.update(conversationRef, {
-        lastMessage: message.content,
-        lastMessageTime: admin.firestore.FieldValue.serverTimestamp(),
-        lastSenderId: message.senderId
-      });
-
       await batch.commit();
-      console.log(`✅ Traitement terminé pour ${conversationId}`);
+      console.log(`✅ Traitement terminé pour conversation ${conversationId}`);
 
     } catch (error: any) {
       console.error('❌ Erreur dans onMessageCreated:', error);
@@ -181,7 +203,67 @@ export const onMessageCreated = functions.firestore
   });
 
 // ========================================
-// 2. MARQUER COMME LU (avec CORS)
+// 2. NOTIFICATION NOUVEAU MESSAGE (GROUPE)
+// ========================================
+
+export const onGroupMessageCreated = functions.firestore
+  .document('groups/{groupId}/messages/{messageId}')
+  .onCreate(async (snapshot, context) => {
+    try {
+      const message = snapshot.data();
+      const { groupId } = context.params;
+
+      // Ignorer si message supprimé
+      if (message.isDeletedForEveryone ||
+          (message.deletedForUsers && message.deletedForUsers.length > 0)) {
+        return null;
+      }
+
+      console.log(`📬 Nouveau message dans groupe: ${groupId}`);
+
+      // Récupérer le groupe
+      const groupRef = admin.firestore().collection('groups').doc(groupId);
+      const groupDoc = await groupRef.get();
+
+      if (!groupDoc.exists) {
+        console.log(`❌ Groupe ${groupId} non trouvé`);
+        return null;
+      }
+
+      const groupData = groupDoc.data();
+      const groupName = groupData?.name || 'Groupe';
+      const memberIds: string[] = groupData?.memberIds || [];
+
+      // Filtrer l'expéditeur
+      const recipients = memberIds.filter((uid: string) => uid !== message.senderId);
+
+      console.log(`📱 Envoi de notifications à ${recipients.length} membres`);
+
+      // Envoyer notifications à tous les membres
+      for (const recipientId of recipients) {
+        await sendNotificationToUser(
+          recipientId,
+          message.senderId,
+          message.senderName,
+          message.content,
+          groupId,
+          snapshot.id,
+          true,
+          groupName
+        );
+      }
+
+      console.log(`✅ Traitement terminé pour groupe ${groupId}`);
+
+    } catch (error: any) {
+      console.error('❌ Erreur dans onGroupMessageCreated:', error);
+    }
+
+    return null;
+  });
+
+// ========================================
+// 3. MARQUER COMME LU (avec CORS)
 // ========================================
 
 export const markAsRead = functions.https.onRequest(async (req, res) => {
@@ -201,52 +283,76 @@ export const markAsRead = functions.https.onRequest(async (req, res) => {
     const userId = decodedToken.uid;
 
     // Récupérer conversationId
-    const { conversationId } = req.body.data || req.body;
+    const { conversationId, isGroup } = req.body.data || req.body;
 
     if (!conversationId) {
       res.status(400).json({ error: 'conversationId manquant' });
       return;
     }
 
-    // Mettre à jour le compteur
-    await admin.firestore()
-      .collection('conversations')
-      .doc(conversationId)
-      .set({
-        [`unreadCounts.${userId}`]: 0
-      }, { merge: true });
+    // Mettre à jour le compteur selon le type
+    if (isGroup) {
+      // Pour les groupes, on ne gère pas les compteurs non lus pour l'instant
+      // Car les messages sont dans groups/{groupId}/messages
+      console.log(`Marqué comme lu pour groupe ${conversationId}`);
+    } else {
+      await admin.firestore()
+        .collection('conversations')
+        .doc(conversationId)
+        .set({
+          [`unreadCounts.${userId}`]: 0
+        }, { merge: true });
+    }
 
-    res.status(200).json({ 
+    res.status(200).json({
       result: { success: true }
     });
 
   } catch (error: any) {
     console.error('Erreur markAsRead:', error);
-    res.status(500).json({ 
-      error: error.message 
+    res.status(500).json({
+      error: error.message
     });
   }
 });
 
 // ========================================
-// 3. CRÉATION AUTOMATIQUE CONVERSATION
+// 4. CRÉATION AUTOMATIQUE CONVERSATION
 // ========================================
 
 export const onConversationCreated = functions.firestore
   .document('conversations/{conversationId}')
   .onCreate(async (snapshot, context) => {
     const conversation = snapshot.data();
-    
+
     // S'assurer que les compteurs non lus existent pour tous les participants
     if (conversation.participantIds && !conversation.unreadCounts) {
       const unreadCounts: { [key: string]: number } = {};
-      
+
       conversation.participantIds.forEach((userId: string) => {
         unreadCounts[userId] = 0;
       });
 
       await snapshot.ref.update({ unreadCounts });
     }
-    
+
     return null;
   });
+
+// ========================================
+// 5. NETTOYAGE UTILISATEUR DÉCONNECTÉ
+// ========================================
+
+export const onUserDeleted = functions.auth.user().onDelete(async (user) => {
+  try {
+    const userId = user.uid;
+    console.log(`🗑️ Nettoyage des données de l'utilisateur ${userId}`);
+
+    // Supprimer le document utilisateur
+    await admin.firestore().collection('users').doc(userId).delete();
+
+    console.log(`✅ Données supprimées pour ${userId}`);
+  } catch (error: any) {
+    console.error('❌ Erreur lors du nettoyage:', error);
+  }
+});

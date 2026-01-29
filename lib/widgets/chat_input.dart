@@ -1,10 +1,71 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../providers/chat_provider.dart';
+import '../services/firestore_service.dart';
 
 /// Zone de saisie avec bouton envoyer et bouton AI ✨
-class ChatInput extends StatelessWidget {
+class ChatInput extends StatefulWidget {
   const ChatInput({super.key});
+
+  @override
+  State<ChatInput> createState() => _ChatInputState();
+}
+
+class _ChatInputState extends State<ChatInput> {
+  final FirestoreService _firestoreService = FirestoreService();
+  bool _isTyping = false;
+
+  void _handleTextChange(String text, ChatProvider provider) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    // Mettre à jour le statut "en train d'écrire"
+    if (text.isNotEmpty && !_isTyping) {
+      _isTyping = true;
+      _firestoreService.setTypingStatus(
+        conversationId: provider.conversationId,
+        userId: currentUser.uid,
+        isTyping: true,
+      );
+    } else if (text.isEmpty && _isTyping) {
+      _isTyping = false;
+      _firestoreService.setTypingStatus(
+        conversationId: provider.conversationId,
+        userId: currentUser.uid,
+        isTyping: false,
+      );
+    }
+  }
+
+  void _handleSend(ChatProvider provider) {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return;
+
+    // Arrêter le statut "en train d'écrire"
+    if (_isTyping) {
+      _isTyping = false;
+      _firestoreService.setTypingStatus(
+        conversationId: provider.conversationId,
+        userId: currentUser.uid,
+        isTyping: false,
+      );
+    }
+
+    // Envoyer le message
+    provider.sendMessage();
+  }
+
+  @override
+  void dispose() {
+    // S'assurer qu'on arrête le statut "en train d'écrire" quand on quitte
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser != null && _isTyping) {
+      // Note: Ceci peut ne pas fonctionner correctement si le provider n'est plus disponible
+      _isTyping = false;
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -38,10 +99,11 @@ class ChatInput extends StatelessWidget {
             Expanded(
               child: TextField(
                 controller: provider.messageController,
+                onChanged: (text) => _handleTextChange(text, provider),
                 decoration: InputDecoration(
                   hintText: 'Écrire un message...',
                   filled: true,
-                  fillColor: colorScheme.surfaceVariant.withOpacity(0.5),
+                  fillColor: colorScheme.surfaceContainerHighest.withOpacity(0.5),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 16,
                     vertical: 12,
@@ -54,7 +116,7 @@ class ChatInput extends StatelessWidget {
                 textCapitalization: TextCapitalization.sentences,
                 maxLines: null,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (_) => provider.sendMessage(),
+                onSubmitted: (_) => _handleSend(provider),
               ),
             ),
 
@@ -62,7 +124,7 @@ class ChatInput extends StatelessWidget {
 
             // Bouton envoyer
             IconButton(
-              onPressed: provider.sendMessage,
+              onPressed: () => _handleSend(provider),
               icon: Icon(
                 Icons.send_rounded,
                 color: colorScheme.primary,
