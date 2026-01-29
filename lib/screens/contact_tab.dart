@@ -5,6 +5,7 @@ import '../models/group.dart';
 import '../models/broadcast_list.dart';
 import '../services/user_service.dart';
 import '../services/firestore_service.dart';
+import 'group_chat_screen.dart';
 
 /// Onglet Contacts avec groupes et listes de diffusion
 class ContactsTab extends StatefulWidget {
@@ -960,10 +961,13 @@ class _GroupTile extends StatelessWidget {
         color: colorScheme.primary,
       ),
       onTap: () {
-        // TODO: Ouvrir la conversation de groupe
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Ouvrir le groupe "${group.name}"'),
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => GroupChatScreen(
+              group: group,
+              onBack: () => Navigator.pop(context),
+            ),
           ),
         );
       },

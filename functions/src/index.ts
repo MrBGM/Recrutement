@@ -60,19 +60,32 @@ export const onMessageCreated = functions.firestore
       }
 
       const conversation = conversationDoc.data();
-      
+
       // ✅ Déterminer les participants
       let participants: string[] = [];
-      
+
       // Pour conversations 1-1 (format: userId1_userId2)
-      if (conversationId.includes('_')) {
+      if (conversationId.includes('_') && conversationId.split('_').length === 2) {
         participants = conversationId.split('_');
-      } 
-      // Pour groupes (avec participantIds)
+      }
+      // Pour groupes (avec participantIds dans la conversation)
       else if (conversation?.participantIds) {
         participants = conversation.participantIds;
       }
-      
+      // Pour groupes (vérifier dans la collection groups si c'est un message de groupe)
+      else if (message.isGroupMessage && message.groupId) {
+        const groupDoc = await admin.firestore()
+          .collection('groups')
+          .doc(message.groupId)
+          .get();
+
+        if (groupDoc.exists) {
+          const groupData = groupDoc.data();
+          participants = groupData?.memberIds || [];
+          console.log(`📱 Groupe trouvé: ${message.groupId}, ${participants.length} membres`);
+        }
+      }
+
       // Filtrer l'expéditeur
       const recipients = participants.filter((uid: string) => uid !== message.senderId);
 

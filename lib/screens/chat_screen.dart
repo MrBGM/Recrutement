@@ -327,7 +327,7 @@ class ChatScreen extends StatelessWidget {
   }
 }
 
-/// ✨ NOUVEAU : Indicateur "en train d'écrire..."
+/// Indicateur "en train d'écrire..." avec mise à jour en temps réel
 class _TypingIndicator extends StatelessWidget {
   final String otherUserId;
 
@@ -338,9 +338,12 @@ class _TypingIndicator extends StatelessWidget {
     final userService = UserService();
 
     return StreamBuilder<AppUser?>(
-      stream: userService.getUserById(otherUserId).asStream(),
+      // Utiliser getUserStream pour les mises à jour en temps réel
+      stream: userService.getUserStream(otherUserId),
       builder: (context, snapshot) {
-        if (!snapshot.hasData) return const SizedBox.shrink();
+        if (!snapshot.hasData || snapshot.data == null) {
+          return const SizedBox.shrink();
+        }
 
         final user = snapshot.data!;
         final conversationId = context.read<ChatProvider>().conversationId;
