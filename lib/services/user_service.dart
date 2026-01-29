@@ -113,4 +113,40 @@ class UserService {
     }
     return null;
   }
+
+  /// Met à jour le profil utilisateur (displayName et/ou status)
+  Future<void> updateUserProfile({
+    required String userId,
+    String? displayName,
+    String? status,
+    String? photoUrl,
+  }) async {
+    final updates = <String, dynamic>{};
+
+    if (displayName != null) {
+      updates['displayName'] = displayName;
+    }
+
+    if (status != null) {
+      updates['status'] = status;
+    }
+
+    if (photoUrl != null) {
+      updates['photoUrl'] = photoUrl;
+    }
+
+    if (updates.isNotEmpty) {
+      await _usersCollection.doc(userId).update(updates);
+    }
+  }
+
+  /// Stream d'un utilisateur spécifique (pour écouter les changements en temps réel)
+  Stream<AppUser?> getUserStream(String userId) {
+    return _usersCollection.doc(userId).snapshots().map((doc) {
+      if (doc.exists) {
+        return AppUser.fromFirestore(doc);
+      }
+      return null;
+    });
+  }
 }

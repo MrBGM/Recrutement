@@ -22,6 +22,14 @@
         {"fieldPath": "memberIds", "arrayConfig": "CONTAINS"},
         {"fieldPath": "updatedAt", "direction": "DESCENDING"}
       ]
+    },
+    {
+      "collectionId": "broadcasts",
+      "fields": [
+        {"fieldPath": "createdBy", "order": "ASCENDING"},
+        {"fieldPath": "updatedAt", "order": "DESCENDING"}
+      ]
     }
-  ]
+  ],
+  "fieldOverrides": []
 }
