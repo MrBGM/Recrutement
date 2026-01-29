@@ -1,0 +1,27 @@
+
+{
+  "indexes": [
+    {
+      "collectionGroup": "messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "timestamp", "direction": "DESCENDING"},
+        {"fieldPath": "__name__", "direction": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "conversations",
+      "fields": [
+        {"fieldPath": "participantIds", "arrayConfig": "CONTAINS"},
+        {"fieldPath": "lastMessageTime", "direction": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionId": "groups",
+      "fields": [
+        {"fieldPath": "memberIds", "arrayConfig": "CONTAINS"},
+        {"fieldPath": "updatedAt", "direction": "DESCENDING"}
+      ]
+    }
+  ]
+}

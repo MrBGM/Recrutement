@@ -1,0 +1,61 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "ai-chat-23aa5",
+          "appId": "1:364659039092:android:56a3629ddb6e68940aaa21",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "ai-chat-23aa5",
+          "configurations": {
+            "android": "1:364659039092:android:56a3629ddb6e68940aaa21",
+            "ios": "1:364659039092:ios:6c2a3bc5a5026f0d0aaa21",
+            "macos": "1:364659039092:ios:6c2a3bc5a5026f0d0aaa21",
+            "web": "1:364659039092:web:d06724261cff094a0aaa21",
+            "windows": "1:364659039092:web:88468b1a384928c00aaa21"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run lint",
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
+  ]
+}

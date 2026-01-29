@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  
+  <!-- Meta PWA -->
+  <meta name="theme-color" content="#6366F1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.json">
+  
+  <!-- Icons -->
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
+  
+  <!-- Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/firebase-messaging-sw.js')
+          .then(function(registration) {
+            console.log('ServiceWorker registration successful:', registration.scope);
+            
+            // Forcer l'activation
+            if (registration.waiting) {
+              registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+            }
+            
+            // Vérifier les mises à jour
+            registration.addEventListener('updatefound', () => {
+              const newWorker = registration.installing;
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  // Nouvelle version disponible
+                  if (confirm('Une nouvelle version est disponible. Recharger ?')) {
+                    window.location.reload();
+                  }
+                }
+              });
+            });
+          })
+          .catch(function(err) {
+            console.log('ServiceWorker registration failed:', err);
+          });
+          
+        // Gérer les messages en foreground
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          console.log('Message du Service Worker:', event.data);
+        });
+      });
+    }
+    
+    // VAPID Key pour FCM Web
+    window.firebaseConfig = {
+      apiKey: "AIzaSyA4gFkg8wz1zB7cBaQfLHf3Lx2fXoBY9Zc",
+      authDomain: "ai-chat-23aa5.firebaseapp.com",
+      projectId: "ai-chat-23aa5",
+      storageBucket: "ai-chat-23aa5.firebasestorage.app",
+      messagingSenderId: "364659039092",
+      appId: "1:364659039092:web:d06724261cff094a0aaa21",
+      vapidKey: "BKYvvM8UNIJR0Oes2Z_CNtOlndKmeG17Ek17Rs92hIQQHvy802OxqGAkb1bY0fGJaKCFsu1iX8SArRYSWZUFD_M"
+    };
+  </script>
+</head>
+<body>
+  <script src="main.dart.js" type="application/javascript"></script>
+</body>
+</html>

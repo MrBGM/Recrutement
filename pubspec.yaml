@@ -1,0 +1,36 @@
+# pubspec.yaml - CORRIGÉ
+name: ai_chat
+description: Mini application de chat temps réel avec bouton AI
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Firebase - VERSIONS STABLES
+  firebase_core: ^2.28.0
+  cloud_firestore: ^4.16.0
+  firebase_auth: ^4.16.0
+  firebase_messaging: ^14.9.0
+  
+  # REMPLACEZ firebase_functions par cloud_functions
+  cloud_functions: ^4.5.0  # ✅ C'EST LE BON NOM
+  
+  # Autres dépendances
+  provider: ^6.1.1
+  http: ^1.2.0
+  cached_network_image: ^3.3.0
+  uuid: ^4.3.1
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+
+flutter:
+  uses-material-design: true
