@@ -75,12 +75,15 @@ class FirestoreService {
   /// Stream des messages filtrés (exclut les supprimés pour l'utilisateur)
   Stream<List<Message>> getMessagesStream(
     String conversationId,
-    String currentUserId,
-  ) {
-    return _firestore
-        .collection('conversations')
-        .doc(conversationId)
-        .collection('messages')
+    String currentUserId, {
+    bool isGroup = false,
+  }) {
+    // Pour les groupes, utiliser la collection groups/{groupId}/messages
+    final collection = isGroup
+        ? _firestore.collection('groups').doc(conversationId).collection('messages')
+        : _firestore.collection('conversations').doc(conversationId).collection('messages');
+
+    return collection
         .orderBy('timestamp', descending: false)
         .snapshots()
         .map((snapshot) {
@@ -107,7 +110,24 @@ class FirestoreService {
     bool isGroup = false,
     String? groupId,
   }) async {
-    // ✅ S'assurer que la conversation existe
+    // Pour les groupes, utiliser la collection groups/{groupId}/messages
+    if (isGroup && groupId != null) {
+      return _sendGroupMessage(
+        groupId: groupId,
+        content: content,
+        senderId: senderId,
+        senderName: senderName,
+        type: type,
+        mediaUrl: mediaUrl,
+        thumbnailUrl: thumbnailUrl,
+        mediaMetadata: mediaMetadata,
+        replyToMessageId: replyToMessageId,
+        replyToContent: replyToContent,
+        replyToSenderName: replyToSenderName,
+      );
+    }
+
+    // ✅ S'assurer que la conversation existe (pour les 1-1)
     final participantIds = conversationId.split('_');
     await _ensureConversationExists(conversationId, participantIds);
 
@@ -129,14 +149,13 @@ class FirestoreService {
       'deletedForUsers': [],
       'isEdited': false,
       'reactions': {},
-      'isGroupMessage': isGroup,
+      'isGroupMessage': false,
       if (mediaUrl != null) 'mediaUrl': mediaUrl,
       if (thumbnailUrl != null) 'thumbnailUrl': thumbnailUrl,
       if (mediaMetadata != null) 'mediaMetadata': mediaMetadata,
       if (replyToMessageId != null) 'replyToMessageId': replyToMessageId,
       if (replyToContent != null) 'replyToContent': replyToContent,
       if (replyToSenderName != null) 'replyToSenderName': replyToSenderName,
-      if (groupId != null) 'groupId': groupId,
     };
 
     try {
@@ -152,6 +171,67 @@ class FirestoreService {
       return messageRef.id;
     } catch (e) {
       print('❌ Erreur sendMessage: $e');
+      rethrow;
+    }
+  }
+
+  /// Envoie un message dans un groupe
+  Future<String> _sendGroupMessage({
+    required String groupId,
+    required String content,
+    required String senderId,
+    required String senderName,
+    MessageType type = MessageType.text,
+    String? mediaUrl,
+    String? thumbnailUrl,
+    Map<String, dynamic>? mediaMetadata,
+    String? replyToMessageId,
+    String? replyToContent,
+    String? replyToSenderName,
+  }) async {
+    final messageRef = _firestore
+        .collection('groups')
+        .doc(groupId)
+        .collection('messages')
+        .doc();
+
+    final messageData = {
+      'id': messageRef.id,
+      'content': content,
+      'senderId': senderId,
+      'senderName': senderName,
+      'timestamp': Timestamp.fromDate(DateTime.now()),
+      'status': MessageStatus.sent.name,
+      'type': type.name,
+      'isDeletedForEveryone': false,
+      'deletedForUsers': [],
+      'isEdited': false,
+      'reactions': {},
+      'isGroupMessage': true,
+      'groupId': groupId,
+      if (mediaUrl != null) 'mediaUrl': mediaUrl,
+      if (thumbnailUrl != null) 'thumbnailUrl': thumbnailUrl,
+      if (mediaMetadata != null) 'mediaMetadata': mediaMetadata,
+      if (replyToMessageId != null) 'replyToMessageId': replyToMessageId,
+      if (replyToContent != null) 'replyToContent': replyToContent,
+      if (replyToSenderName != null) 'replyToSenderName': replyToSenderName,
+    };
+
+    try {
+      await messageRef.set(messageData);
+
+      // Mettre à jour les métadonnées du groupe
+      await _firestore.collection('groups').doc(groupId).update({
+        'lastMessage': content,
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'lastSenderId': senderId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      print('✅ Message envoyé au groupe $groupId');
+      return messageRef.id;
+    } catch (e) {
+      print('❌ Erreur _sendGroupMessage: $e');
       rethrow;
     }
   }
@@ -243,13 +323,13 @@ class FirestoreService {
     required String messageId,
     required String userId,
     required String emoji,
+    bool isGroup = false,
   }) async {
-    await _firestore
-        .collection('conversations')
-        .doc(conversationId)
-        .collection('messages')
-        .doc(messageId)
-        .update({
+    final collection = isGroup
+        ? _firestore.collection('groups').doc(conversationId).collection('messages')
+        : _firestore.collection('conversations').doc(conversationId).collection('messages');
+
+    await collection.doc(messageId).update({
       'reactions.$userId': emoji,
     });
   }
@@ -259,13 +339,13 @@ class FirestoreService {
     required String conversationId,
     required String messageId,
     required String userId,
+    bool isGroup = false,
   }) async {
-    await _firestore
-        .collection('conversations')
-        .doc(conversationId)
-        .collection('messages')
-        .doc(messageId)
-        .update({
+    final collection = isGroup
+        ? _firestore.collection('groups').doc(conversationId).collection('messages')
+        : _firestore.collection('conversations').doc(conversationId).collection('messages');
+
+    await collection.doc(messageId).update({
       'reactions.$userId': FieldValue.delete(),
     });
   }
@@ -279,13 +359,13 @@ class FirestoreService {
     required String conversationId,
     required String messageId,
     required String userId,
+    bool isGroup = false,
   }) async {
-    await _firestore
-        .collection('conversations')
-        .doc(conversationId)
-        .collection('messages')
-        .doc(messageId)
-        .update({
+    final collection = isGroup
+        ? _firestore.collection('groups').doc(conversationId).collection('messages')
+        : _firestore.collection('conversations').doc(conversationId).collection('messages');
+
+    await collection.doc(messageId).update({
       'deletedForUsers': FieldValue.arrayUnion([userId]),
     });
   }
@@ -294,13 +374,13 @@ class FirestoreService {
   Future<void> deleteMessageForEveryone({
     required String conversationId,
     required String messageId,
+    bool isGroup = false,
   }) async {
-    await _firestore
-        .collection('conversations')
-        .doc(conversationId)
-        .collection('messages')
-        .doc(messageId)
-        .update({
+    final collection = isGroup
+        ? _firestore.collection('groups').doc(conversationId).collection('messages')
+        : _firestore.collection('conversations').doc(conversationId).collection('messages');
+
+    await collection.doc(messageId).update({
       'isDeletedForEveryone': true,
       'content': 'Ce message a été supprimé',
       'deletedAt': FieldValue.serverTimestamp(),
@@ -312,13 +392,13 @@ class FirestoreService {
     required String conversationId,
     required String messageId,
     required String newContent,
+    bool isGroup = false,
   }) async {
-    final messageDoc = await _firestore
-        .collection('conversations')
-        .doc(conversationId)
-        .collection('messages')
-        .doc(messageId)
-        .get();
+    final collection = isGroup
+        ? _firestore.collection('groups').doc(conversationId).collection('messages')
+        : _firestore.collection('conversations').doc(conversationId).collection('messages');
+
+    final messageDoc = await collection.doc(messageId).get();
 
     if (!messageDoc.exists) return;
 
@@ -718,24 +798,39 @@ class FirestoreService {
     await batch.commit();
   }
 
-  /// Supprime toute la conversation
-  Future<void> clearConversation(String conversationId) async {
-    // Supprimer tous les messages d'abord
-    final messagesSnapshot = await _firestore
-        .collection('conversations')
-        .doc(conversationId)
-        .collection('messages')
-        .get();
+  /// Supprime toute la conversation ou les messages du groupe
+  Future<void> clearConversation(String conversationId, {bool isGroup = false}) async {
+    if (isGroup) {
+      // Pour les groupes, supprimer seulement les messages (pas le groupe lui-même)
+      final messagesSnapshot = await _firestore
+          .collection('groups')
+          .doc(conversationId)
+          .collection('messages')
+          .get();
 
-    final batch = _firestore.batch();
-    for (final doc in messagesSnapshot.docs) {
-      batch.delete(doc.reference);
+      final batch = _firestore.batch();
+      for (final doc in messagesSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+    } else {
+      // Supprimer tous les messages d'abord
+      final messagesSnapshot = await _firestore
+          .collection('conversations')
+          .doc(conversationId)
+          .collection('messages')
+          .get();
+
+      final batch = _firestore.batch();
+      for (final doc in messagesSnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+
+      // Supprimer la conversation elle-même
+      batch.delete(_firestore.collection('conversations').doc(conversationId));
+
+      await batch.commit();
     }
-
-    // Supprimer la conversation elle-même
-    batch.delete(_firestore.collection('conversations').doc(conversationId));
-
-    await batch.commit();
   }
 
   // ==========================================
@@ -747,11 +842,13 @@ class FirestoreService {
     required String conversationId,
     required String currentUserId,
     int limit = 25,
+    bool isGroup = false,
   }) async {
-    final snapshot = await _firestore
-        .collection('conversations')
-        .doc(conversationId)
-        .collection('messages')
+    final collection = isGroup
+        ? _firestore.collection('groups').doc(conversationId).collection('messages')
+        : _firestore.collection('conversations').doc(conversationId).collection('messages');
+
+    final snapshot = await collection
         .orderBy('timestamp', descending: true)
         .limit(limit)
         .get();

@@ -1,30 +1,32 @@
-
 {
   "indexes": [
     {
       "collectionGroup": "messages",
       "queryScope": "COLLECTION",
       "fields": [
-        {"fieldPath": "timestamp", "direction": "DESCENDING"},
-        {"fieldPath": "__name__", "direction": "DESCENDING"}
+        {"fieldPath": "timestamp", "order": "DESCENDING"},
+        {"fieldPath": "__name__", "order": "DESCENDING"}
       ]
     },
     {
-      "collectionId": "conversations",
+      "collectionGroup": "conversations",
+      "queryScope": "COLLECTION",
       "fields": [
         {"fieldPath": "participantIds", "arrayConfig": "CONTAINS"},
-        {"fieldPath": "lastMessageTime", "direction": "DESCENDING"}
+        {"fieldPath": "lastMessageTime", "order": "DESCENDING"}
       ]
     },
     {
-      "collectionId": "groups",
+      "collectionGroup": "groups",
+      "queryScope": "COLLECTION",
       "fields": [
         {"fieldPath": "memberIds", "arrayConfig": "CONTAINS"},
-        {"fieldPath": "updatedAt", "direction": "DESCENDING"}
+        {"fieldPath": "updatedAt", "order": "DESCENDING"}
       ]
     },
     {
-      "collectionId": "broadcasts",
+      "collectionGroup": "broadcasts",
+      "queryScope": "COLLECTION",
       "fields": [
         {"fieldPath": "createdBy", "order": "ASCENDING"},
         {"fieldPath": "updatedAt", "order": "DESCENDING"}

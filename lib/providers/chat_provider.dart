@@ -48,7 +48,7 @@ class ChatProvider extends ChangeNotifier {
   String? get groupId => _groupId;
 
   Stream<List<Message>> get messagesStream =>
-      _firestoreService.getMessagesStream(_conversationId, _currentUserId);
+      _firestoreService.getMessagesStream(_conversationId, _currentUserId, isGroup: _isGroupChat);
 
   Future<void> sendMessage() async {
     final content = messageController.text.trim();
@@ -102,6 +102,7 @@ class ChatProvider extends ChangeNotifier {
         conversationId: _conversationId,
         currentUserId: _currentUserId,
         limit: 10,
+        isGroup: _isGroupChat,
       );
 
       final suggestion = await _aiService.generateSuggestion(
@@ -124,20 +125,20 @@ class ChatProvider extends ChangeNotifier {
   /// Supprime tous les messages de la conversation
   Future<void> clearChat() async {
     try {
-      await _firestoreService.clearConversation(_conversationId);
+      await _firestoreService.clearConversation(_conversationId, isGroup: _isGroupChat);
     } catch (e) {
       _error = 'Erreur lors de la suppression: $e';
       notifyListeners();
     }
   }
 
-  /// AJOUTER CES MÉTHODES
   Future<void> deleteMessageForMe(String messageId) async {
     try {
       await _firestoreService.deleteMessageForMe(
         conversationId: _conversationId,
         messageId: messageId,
         userId: _currentUserId,
+        isGroup: _isGroupChat,
       );
     } catch (e) {
       _error = 'Erreur lors de la suppression: $e';
@@ -150,6 +151,7 @@ class ChatProvider extends ChangeNotifier {
       await _firestoreService.deleteMessageForEveryone(
         conversationId: _conversationId,
         messageId: messageId,
+        isGroup: _isGroupChat,
       );
     } catch (e) {
       _error = 'Erreur lors de la suppression: $e';
@@ -163,6 +165,7 @@ class ChatProvider extends ChangeNotifier {
         conversationId: _conversationId,
         messageId: messageId,
         newContent: newContent,
+        isGroup: _isGroupChat,
       );
     } catch (e) {
       _error = 'Erreur lors de l\'édition: $e';
@@ -177,6 +180,7 @@ class ChatProvider extends ChangeNotifier {
         messageId: messageId,
         userId: _currentUserId,
         emoji: emoji,
+        isGroup: _isGroupChat,
       );
     } catch (e) {
       _error = 'Erreur lors de l\'ajout de réaction: $e';
