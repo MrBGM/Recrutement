@@ -4,14 +4,31 @@ import '../models/message.dart';
 import '../config/api_config.dart';
 import '../config/api_keys.dart';
 
-/// Service d'intelligence artificielle
-/// Gere les appels au backend pour la generation de suggestions
+/// Service d'intelligence artificielle AMÉLIORÉ
+/// Utilise llama-3.1-70b-versatile pour des réponses plus naturelles
 class AIService {
-  // Cache pour eviter les appels repetes
+  // Cache pour éviter les appels répétés
   static final Map<String, _CachedAnalysis> _analysisCache = {};
   static const Duration _cacheDuration = Duration(minutes: 5);
 
-  /// Genere une suggestion de message
+  // ==========================================
+  // CONFIGURATION DU MODÈLE
+  // ==========================================
+
+  /// Modèle principal (plus intelligent)
+  static const String _primaryModel = 'llama-3.1-70b-versatile';
+
+  /// Modèle fallback (plus rapide)
+  static const String _fallbackModel = 'llama-3.1-8b-instant';
+
+  /// Paramètres optimisés
+  static const double _temperature = 0.7;
+  static const double _topP = 0.9;
+  static const double _presencePenalty = 0.1;
+  static const int _maxTokens = 250;
+  static const int _contextMessageLimit = 15; // 15-20 messages de contexte
+
+  /// Génère une suggestion de message
   Future<String> generateSuggestion({
     required String currentInput,
     required List<Message> recentMessages,
@@ -30,7 +47,7 @@ class AIService {
     } catch (e) {
       _debugLog('❌ Erreur backend: $e');
 
-      // En cas d'erreur, utiliser le fallback si configure
+      // En cas d'erreur, utiliser le fallback si configuré
       if (ApiConfig.enableFallback && ApiKeys.isGroqConfigured) {
         _debugLog('🔄 Utilisation du fallback Groq direct');
         return _callGroqDirectly(
@@ -41,13 +58,12 @@ class AIService {
         );
       }
 
-      // Si pas de fallback, renvoyer une erreur claire
       throw Exception(
           'Backend indisponible. Vérifiez que le serveur tourne sur ${ApiConfig.backendUrl}');
     }
   }
 
-  /// Appelle le backend pour generer une suggestion
+  /// Appelle le backend pour générer une suggestion
   Future<String> _callBackend({
     required String currentInput,
     required List<Message> recentMessages,
@@ -64,6 +80,7 @@ class AIService {
                 'content': m.content,
                 'senderId': m.senderId,
                 'senderName': m.senderName,
+                'timestamp': m.timestamp.toIso8601String(),
               })
           .toList(),
       'currentUserId': currentUserId,
@@ -114,7 +131,7 @@ class AIService {
     }
   }
 
-  /// Appel direct a l'API Groq (fallback)
+  /// Appel direct à l'API Groq (fallback) - VERSION AMÉLIORÉE
   Future<String> _callGroqDirectly({
     required String currentInput,
     required List<Message> recentMessages,
@@ -124,18 +141,19 @@ class AIService {
     const baseUrl = 'https://api.groq.com/openai/v1/chat/completions';
     final mode = currentInput.isEmpty ? 'suggest' : 'improve';
 
-    _debugLog('🤖 Appel Groq direct - Mode: $mode');
+    _debugLog('🤖 Appel Groq direct - Mode: $mode - Modèle: $_primaryModel');
 
-    // Analyser la conversation
-    final analysis = _analyzeConversation(
+    // Analyser la conversation de manière approfondie
+    final analysis = _analyzeConversationEnhanced(
       recentMessages,
       currentUserId,
       currentUserName,
     );
 
-    // Construire les prompts
-    final systemPrompt = _buildSystemPrompt(mode, currentUserName, analysis);
-    final userPrompt = _buildUserPrompt(
+    // Construire les prompts enrichis
+    final systemPrompt =
+        _buildEnhancedSystemPrompt(mode, currentUserName, analysis);
+    final userPrompt = _buildEnhancedUserPrompt(
       mode,
       currentInput,
       recentMessages,
@@ -145,6 +163,42 @@ class AIService {
     );
 
     try {
+      // Essayer d'abord avec le modèle principal (70B)
+      final response = await _makeGroqRequest(
+        baseUrl: baseUrl,
+        model: _primaryModel,
+        systemPrompt: systemPrompt,
+        userPrompt: userPrompt,
+      );
+
+      if (response != null) return response;
+
+      // Fallback vers le modèle 8B si 70B échoue
+      _debugLog('⚠️ Fallback vers $_fallbackModel');
+      final fallbackResponse = await _makeGroqRequest(
+        baseUrl: baseUrl,
+        model: _fallbackModel,
+        systemPrompt: systemPrompt,
+        userPrompt: userPrompt,
+      );
+
+      if (fallbackResponse != null) return fallbackResponse;
+
+      throw Exception('Tous les modèles ont échoué');
+    } catch (e) {
+      _debugLog('❌ Erreur Groq: $e');
+      rethrow;
+    }
+  }
+
+  /// Fait une requête à l'API Groq
+  Future<String?> _makeGroqRequest({
+    required String baseUrl,
+    required String model,
+    required String systemPrompt,
+    required String userPrompt,
+  }) async {
+    try {
       final response = await http.post(
         Uri.parse(baseUrl),
         headers: {
@@ -152,13 +206,15 @@ class AIService {
           'Authorization': 'Bearer ${ApiKeys.groqApiKey}',
         },
         body: jsonEncode({
-          'model': 'llama-3.1-8b-instant',
+          'model': model,
           'messages': [
             {'role': 'system', 'content': systemPrompt},
             {'role': 'user', 'content': userPrompt},
           ],
-          'max_tokens': 200,
-          'temperature': 0.75,
+          'max_tokens': _maxTokens,
+          'temperature': _temperature,
+          'top_p': _topP,
+          'presence_penalty': _presencePenalty,
         }),
       );
 
@@ -166,18 +222,19 @@ class AIService {
         final data = jsonDecode(response.body);
         final suggestion =
             data['choices'][0]['message']['content']?.trim() ?? '';
-        _debugLog('✅ Groq: Suggestion générée');
+        _debugLog('✅ Groq ($model): Suggestion générée');
         return suggestion;
       } else {
-        throw Exception('Erreur API Groq: ${response.statusCode}');
+        _debugLog('❌ Erreur Groq $model: ${response.statusCode}');
+        return null;
       }
     } catch (e) {
-      _debugLog('❌ Erreur Groq: $e');
-      rethrow;
+      _debugLog('❌ Exception Groq $model: $e');
+      return null;
     }
   }
 
-  /// Verifie si le backend est disponible
+  /// Vérifie si le backend est disponible
   Future<bool> isBackendAvailable() async {
     try {
       _debugLog('🔍 Test de disponibilité backend...');
@@ -207,22 +264,26 @@ class AIService {
     }
   }
 
-  /// Analyse une conversation
-  _ConversationAnalysis _analyzeConversation(
+  // ==========================================
+  // ANALYSE DE CONVERSATION AMÉLIORÉE
+  // ==========================================
+
+  /// Analyse une conversation de manière approfondie
+  _EnhancedConversationAnalysis _analyzeConversationEnhanced(
     List<Message> messages,
     String currentUserId,
     String currentUserName,
   ) {
-    // Verifier le cache
-    final cacheKey = '${currentUserId}_${messages.length}';
+    // Vérifier le cache
+    final cacheKey = '${currentUserId}_${messages.length}_enhanced';
     final cached = _analysisCache[cacheKey];
     if (cached != null &&
         DateTime.now().difference(cached.timestamp) < _cacheDuration) {
-      return cached.analysis;
+      return cached.analysis as _EnhancedConversationAnalysis;
     }
 
     if (messages.isEmpty) {
-      return _ConversationAnalysis(
+      return _EnhancedConversationAnalysis(
         tone: 'neutre',
         relationship: 'inconnu',
         topics: ['discussion generale'],
@@ -231,9 +292,18 @@ class AIService {
         lastSpeaker: '',
         conversationFlow: 'debut',
         emotionalTone: 'neutre',
+        // Nouveaux champs
+        urgency: 'normal',
+        pendingQuestions: 0,
+        responseRhythm: 'normal',
+        averageMessageLength: 0,
+        timeOfDay: _getTimeOfDay(),
+        detectedIntentions: ['discussion'],
+        contactStyle: _ContactStyle.balanced,
       );
     }
 
+    // Analyses existantes
     final tone = _detectTone(messages);
     final relationship = _detectRelationship(messages, tone);
     final topics = _extractTopics(messages);
@@ -241,11 +311,20 @@ class AIService {
     final conversationFlow = _analyzeConversationFlow(messages, currentUserId);
     final summary = _createConversationSummary(messages, currentUserId, topics);
 
+    // Nouvelles analyses
+    final urgency = _detectUrgency(messages);
+    final pendingQuestions = _countPendingQuestions(messages, currentUserId);
+    final responseRhythm = _analyzeResponseRhythm(messages);
+    final averageLength = _calculateAverageMessageLength(messages);
+    final timeOfDay = _getTimeOfDay();
+    final intentions = _detectIntentions(messages);
+    final contactStyle = _analyzeContactStyle(messages, currentUserId);
+
     final lastMessage = messages.last;
     final lastSpeaker =
         lastMessage.senderId == currentUserId ? 'moi' : lastMessage.senderName;
 
-    final analysis = _ConversationAnalysis(
+    final analysis = _EnhancedConversationAnalysis(
       tone: tone,
       relationship: relationship,
       topics: topics,
@@ -254,6 +333,13 @@ class AIService {
       lastSpeaker: lastSpeaker,
       conversationFlow: conversationFlow,
       emotionalTone: emotionalTone,
+      urgency: urgency,
+      pendingQuestions: pendingQuestions,
+      responseRhythm: responseRhythm,
+      averageMessageLength: averageLength,
+      timeOfDay: timeOfDay,
+      detectedIntentions: intentions,
+      contactStyle: contactStyle,
     );
 
     // Mettre en cache
@@ -261,6 +347,204 @@ class AIService {
 
     return analysis;
   }
+
+  /// Détecte le niveau d'urgence
+  String _detectUrgency(List<Message> messages) {
+    if (messages.isEmpty) return 'normal';
+
+    final recentContent = messages
+        .take(5)
+        .map((m) => m.content.toLowerCase())
+        .join(' ');
+
+    const urgentWords = [
+      'urgent',
+      'vite',
+      'asap',
+      'immédiatement',
+      'maintenant',
+      'sos',
+      'help',
+      'aide',
+      'problème',
+      'erreur',
+      'bug',
+      'bloqué',
+      'deadline',
+      '!!!',
+      '???'
+    ];
+
+    int urgencyScore = 0;
+    for (final word in urgentWords) {
+      if (recentContent.contains(word)) urgencyScore++;
+    }
+
+    // Vérifier aussi les multiples points d'exclamation/interrogation
+    urgencyScore += RegExp(r'[!?]{2,}').allMatches(recentContent).length;
+
+    if (urgencyScore >= 3) return 'très urgent';
+    if (urgencyScore >= 1) return 'urgent';
+    return 'normal';
+  }
+
+  /// Compte les questions sans réponse
+  int _countPendingQuestions(List<Message> messages, String currentUserId) {
+    if (messages.isEmpty) return 0;
+
+    int pendingCount = 0;
+    bool lastWasQuestion = false;
+    String? lastQuestionSender;
+
+    for (final msg in messages.reversed) {
+      final hasQuestion = msg.content.contains('?');
+
+      if (hasQuestion && msg.senderId != currentUserId) {
+        if (!lastWasQuestion || lastQuestionSender != currentUserId) {
+          pendingCount++;
+        }
+        lastWasQuestion = true;
+        lastQuestionSender = msg.senderId;
+      } else if (msg.senderId == currentUserId) {
+        // L'utilisateur a répondu, reset
+        lastWasQuestion = false;
+      }
+    }
+
+    return pendingCount;
+  }
+
+  /// Analyse le rythme de réponse
+  String _analyzeResponseRhythm(List<Message> messages) {
+    if (messages.length < 3) return 'normal';
+
+    final timestamps =
+        messages.map((m) => m.timestamp.millisecondsSinceEpoch).toList();
+    final differences = <int>[];
+
+    for (int i = 1; i < timestamps.length; i++) {
+      differences.add(timestamps[i] - timestamps[i - 1]);
+    }
+
+    final avgDifference =
+        differences.reduce((a, b) => a + b) / differences.length;
+    final avgMinutes = avgDifference / (1000 * 60);
+
+    if (avgMinutes < 2) return 'très rapide';
+    if (avgMinutes < 10) return 'rapide';
+    if (avgMinutes < 60) return 'normal';
+    return 'lent';
+  }
+
+  /// Calcule la longueur moyenne des messages
+  int _calculateAverageMessageLength(List<Message> messages) {
+    if (messages.isEmpty) return 0;
+
+    final totalLength =
+        messages.map((m) => m.content.length).reduce((a, b) => a + b);
+    return (totalLength / messages.length).round();
+  }
+
+  /// Obtient le moment de la journée
+  String _getTimeOfDay() {
+    final hour = DateTime.now().hour;
+
+    if (hour >= 6 && hour < 12) return 'matin';
+    if (hour >= 12 && hour < 14) return 'midi';
+    if (hour >= 14 && hour < 18) return 'après-midi';
+    if (hour >= 18 && hour < 22) return 'soirée';
+    return 'nuit';
+  }
+
+  /// Détecte les intentions dans les messages
+  List<String> _detectIntentions(List<Message> messages) {
+    final intentions = <String>[];
+    final content = messages.map((m) => m.content.toLowerCase()).join(' ');
+
+    final intentionPatterns = {
+      'demande_aide': [
+        'aide',
+        'help',
+        'comment',
+        'pourrais-tu',
+        'peux-tu',
+        'stp',
+        's\'il te plaît'
+      ],
+      'partage_info': [
+        'regarde',
+        'voici',
+        'j\'ai trouvé',
+        'fyi',
+        'pour info',
+        'btw'
+      ],
+      'humour': ['lol', 'mdr', 'ptdr', 'haha', 'xd', '😂', '🤣'],
+      'invitation': [
+        'on se voit',
+        'tu viens',
+        'rdv',
+        'rendez-vous',
+        'ce soir',
+        'demain'
+      ],
+      'confirmation': ['ok', 'd\'accord', 'parfait', 'ça marche', 'validé'],
+      'question': ['?', 'quoi', 'pourquoi', 'comment', 'quand', 'où'],
+      'salutation': [
+        'salut',
+        'coucou',
+        'bonjour',
+        'hey',
+        'hello',
+        'bonsoir'
+      ],
+      'remerciement': ['merci', 'thanks', 'thx', 'cool', 'génial'],
+    };
+
+    intentionPatterns.forEach((intention, keywords) {
+      if (keywords.any((keyword) => content.contains(keyword))) {
+        intentions.add(intention);
+      }
+    });
+
+    return intentions.isEmpty ? ['discussion'] : intentions;
+  }
+
+  /// Analyse le style de communication du contact
+  _ContactStyle _analyzeContactStyle(
+      List<Message> messages, String currentUserId) {
+    final otherMessages =
+        messages.where((m) => m.senderId != currentUserId).toList();
+
+    if (otherMessages.isEmpty) return _ContactStyle.balanced;
+
+    final avgLength = otherMessages.map((m) => m.content.length).reduce(
+            (a, b) => a + b) /
+        otherMessages.length;
+
+    final hasEmojis = otherMessages.any((m) =>
+        RegExp(r'[\u{1F600}-\u{1F64F}]', unicode: true).hasMatch(m.content));
+
+    final hasSlang = otherMessages.any((m) {
+      final content = m.content.toLowerCase();
+      return content.contains('mdr') ||
+          content.contains('lol') ||
+          content.contains('tkt') ||
+          content.contains('ptdr');
+    });
+
+    if (avgLength < 20 && (hasEmojis || hasSlang)) {
+      return _ContactStyle.concise;
+    } else if (avgLength > 100) {
+      return _ContactStyle.verbose;
+    }
+
+    return _ContactStyle.balanced;
+  }
+
+  // ==========================================
+  // DÉTECTION EXISTANTE (conservée)
+  // ==========================================
 
   String _detectTone(List<Message> messages) {
     int formalScore = 0;
@@ -273,7 +557,8 @@ class AIService {
       'cordialement',
       'pourriez',
       'veuillez',
-      'sincèrement'
+      'sincèrement',
+      'vous'
     ];
     const informalWords = [
       'salut',
@@ -285,7 +570,10 @@ class AIService {
       'ptdr',
       'tkt',
       'yo',
-      'hey'
+      'hey',
+      'oklm',
+      'bg',
+      'wsh'
     ];
 
     for (final msg in messages) {
@@ -308,14 +596,16 @@ class AIService {
 
     final content = messages.map((m) => m.content.toLowerCase()).join(' ');
 
-    if (RegExp(r'\b(travail|projet|réunion|bureau|chef)\b').hasMatch(content)) {
-      return 'collegue';
+    if (RegExp(r'\b(travail|projet|réunion|bureau|chef|client)\b')
+        .hasMatch(content)) {
+      return 'collègue';
     }
     if (RegExp(r'\b(maman|papa|famille|parents?|frère|soeur)\b')
         .hasMatch(content)) {
       return 'famille';
     }
-    if (RegExp(r'\b(chéri|bébé|mon amour|ma puce)\b').hasMatch(content)) {
+    if (RegExp(r'\b(chéri|bébé|mon amour|ma puce|je t\'aime)\b')
+        .hasMatch(content)) {
       return 'couple';
     }
 
@@ -333,7 +623,8 @@ class AIService {
         'réunion',
         'bureau',
         'meeting',
-        'boulot'
+        'boulot',
+        'boss'
       ],
       'rendez-vous': [
         'rdv',
@@ -341,11 +632,28 @@ class AIService {
         'voir',
         'rencontrer',
         'heure',
-        'demain'
+        'demain',
+        'ce soir'
       ],
-      'loisirs': ['film', 'série', 'jeu', 'sport', 'musique', 'concert'],
-      'nourriture': ['manger', 'restaurant', 'bouffe', 'dîner', 'déjeuner'],
-      'voyage': ['voyage', 'vacances', 'partir', 'destination', 'avion'],
+      'loisirs': [
+        'film',
+        'série',
+        'jeu',
+        'sport',
+        'musique',
+        'concert',
+        'netflix'
+      ],
+      'nourriture': [
+        'manger',
+        'restaurant',
+        'bouffe',
+        'dîner',
+        'déjeuner',
+        'faim'
+      ],
+      'voyage': ['voyage', 'vacances', 'partir', 'destination', 'avion', 'vol'],
+      'tech': ['code', 'bug', 'app', 'site', 'ordi', 'phone'],
     };
 
     topicKeywords.forEach((topic, keywords) {
@@ -354,7 +662,7 @@ class AIService {
       }
     });
 
-    return topics.isEmpty ? ['discussion generale'] : topics;
+    return topics.isEmpty ? ['discussion générale'] : topics;
   }
 
   String _detectEmotionalTone(List<Message> messages) {
@@ -372,7 +680,9 @@ class AIService {
       'parfait',
       'merci',
       'top',
-      'excellent'
+      'excellent',
+      'nice',
+      'trop bien'
     ];
     const negativeWords = [
       'désolé',
@@ -380,7 +690,9 @@ class AIService {
       'problème',
       'malheureusement',
       'triste',
-      'difficile'
+      'difficile',
+      'nul',
+      'merde'
     ];
     const positiveEmojis = [
       '😊',
@@ -391,9 +703,10 @@ class AIService {
       '🎉',
       '✨',
       '🥳',
-      '😁'
+      '😁',
+      '🙌'
     ];
-    const negativeEmojis = ['😢', '😔', '😡', '💔', '😤', '😞', '😭'];
+    const negativeEmojis = ['😢', '😔', '😡', '💔', '😤', '😞', '😭', '😩'];
 
     for (final word in positiveWords) {
       if (contentLower.contains(word)) positiveScore++;
@@ -409,13 +722,13 @@ class AIService {
     }
 
     if (positiveScore > negativeScore * 1.5) return 'positif';
-    if (negativeScore > positiveScore) return 'negatif';
+    if (negativeScore > positiveScore) return 'négatif';
     return 'neutre';
   }
 
   String _analyzeConversationFlow(
       List<Message> messages, String currentUserId) {
-    if (messages.length < 2) return 'debut';
+    if (messages.length < 2) return 'début';
 
     final recentMessages =
         messages.length > 5 ? messages.sublist(messages.length - 5) : messages;
@@ -441,150 +754,270 @@ class AIService {
     String summary = '';
 
     if (messages.length <= 3) {
-      summary = 'Debut de conversation';
+      summary = 'Début de conversation';
     } else if (messages.length <= 10) {
       summary = 'Conversation en cours';
     } else {
       summary = 'Discussion active';
     }
 
-    if (topics.isNotEmpty && topics[0] != 'discussion generale') {
+    if (topics.isNotEmpty && topics[0] != 'discussion générale') {
       summary += ' portant sur ${topics.take(2).join(", ")}';
     }
 
     if (otherMessages.isNotEmpty) {
       final lastOther = otherMessages.last.content;
       if (lastOther.contains('?')) {
-        summary += '. Question en attente de reponse';
+        summary += '. Question en attente de réponse';
       }
     }
 
     return summary;
   }
 
-  String _buildSystemPrompt(
-      String mode, String userName, _ConversationAnalysis analysis) {
-    final base =
-        '''Tu es un assistant IA conversationnel expert qui aide $userName a communiquer efficacement.
+  // ==========================================
+  // PROMPTS ENRICHIS
+  // ==========================================
 
-CONTEXTE DE LA CONVERSATION:
-- Ton general: ${analysis.tone}
-- Type de relation: ${analysis.relationship}
-- Sujets abordes: ${analysis.topics.join(', ')}
-- Resume: ${analysis.conversationSummary}
-- Ton emotionnel: ${analysis.emotionalTone}
-- Flux: ${analysis.conversationFlow}''';
+  String _buildEnhancedSystemPrompt(
+      String mode, String userName, _EnhancedConversationAnalysis analysis) {
+    final styleGuidelines = _getStyleGuidelines(analysis);
+
+    final base = '''Tu es un assistant IA conversationnel expert qui aide $userName à communiquer naturellement.
+
+═══════════════════════════════════════
+📊 ANALYSE APPROFONDIE DE LA CONVERSATION
+═══════════════════════════════════════
+
+CONTEXTE RELATIONNEL:
+• Type de relation: ${analysis.relationship}
+• Ton général: ${analysis.tone}
+• Ambiance émotionnelle: ${analysis.emotionalTone}
+
+DYNAMIQUE DE CONVERSATION:
+• Flux actuel: ${analysis.conversationFlow}
+• Rythme d'échange: ${analysis.responseRhythm}
+• Questions en attente: ${analysis.pendingQuestions}
+• Niveau d'urgence: ${analysis.urgency}
+
+STYLE DU CONTACT:
+• Longueur moyenne des messages: ${analysis.averageMessageLength} caractères
+• Style détecté: ${analysis.contactStyle.name}
+
+CONTEXTE TEMPOREL:
+• Moment: ${analysis.timeOfDay}
+• Sujets abordés: ${analysis.topics.join(', ')}
+
+INTENTIONS DÉTECTÉES:
+${analysis.detectedIntentions.map((i) => '• $i').join('\n')}
+
+═══════════════════════════════════════
+📝 RÉSUMÉ
+═══════════════════════════════════════
+${analysis.conversationSummary}
+''';
 
     if (mode == 'suggest') {
       return '''$base
 
-MISSION - SUGGESTION DE REPONSE:
-Tu dois proposer une reponse que $userName peut envoyer directement.
+═══════════════════════════════════════
+🎯 MISSION: SUGGESTION DE RÉPONSE
+═══════════════════════════════════════
 
-REGLES ABSOLUES:
-- Reponds UNIQUEMENT avec le message suggere (aucune explication)
-- Pas de guillemets, pas de preambule
-- 1-3 phrases maximum
-- Langage naturel et humain
-- En francais
-- Ne dis JAMAIS "En tant qu'assistant..." ou similaire
-- Adapte le ton: ${analysis.tone == 'informel' ? 'court et direct' : 'complet mais concis'}''';
+Tu dois proposer UNE réponse que $userName peut envoyer directement.
+
+$styleGuidelines
+
+RÈGLES ABSOLUES:
+✓ Réponds UNIQUEMENT avec le message suggéré
+✓ Pas de guillemets ni de préambule
+✓ 1-3 phrases maximum (adapté au style du contact)
+✓ Langage naturel et humain en français
+✓ Ne JAMAIS dire "En tant qu'assistant..." ou similaire
+✓ Ne JAMAIS commencer par "Je" si le ton est informel
+✓ ${analysis.pendingQuestions > 0 ? 'PRIORITÉ: Répondre aux questions en attente' : 'Faire avancer la conversation'}
+✓ ${analysis.urgency != 'normal' ? 'URGENT: Répondre de manière appropriée à l\'urgence' : ''}''';
     }
 
     return '''$base
 
-MISSION - AMELIORATION DE MESSAGE:
-Tu dois ameliorer le brouillon de $userName tout en preservant son intention.
+═══════════════════════════════════════
+🎯 MISSION: AMÉLIORATION DE MESSAGE
+═══════════════════════════════════════
 
-REGLES ABSOLUES:
-- Reponds UNIQUEMENT avec le message ameliore (aucune explication)
-- Pas de guillemets, pas de commentaires
-- Garde la longueur similaire a l'original
-- Corrige les fautes sans changer le sens
-- En francais''';
+Tu dois améliorer le brouillon de $userName tout en préservant son intention.
+
+$styleGuidelines
+
+RÈGLES ABSOLUES:
+✓ Réponds UNIQUEMENT avec le message amélioré
+✓ Pas de guillemets ni de commentaires
+✓ Garde une longueur similaire à l'original
+✓ Corrige les fautes sans changer le sens
+✓ Adapte le niveau de formalité au contexte
+✓ En français''';
   }
 
-  String _buildUserPrompt(
+  String _getStyleGuidelines(_EnhancedConversationAnalysis analysis) {
+    final buffer = StringBuffer('ADAPTATION AU STYLE:\n');
+
+    // Style basé sur la relation
+    switch (analysis.relationship) {
+      case 'ami':
+        buffer.writeln('• Ton amical et décontracté');
+        buffer.writeln('• Emojis occasionnels acceptés');
+        break;
+      case 'collègue':
+        buffer.writeln('• Ton professionnel mais accessible');
+        buffer.writeln('• Pas d\'emojis sauf 👍');
+        break;
+      case 'famille':
+        buffer.writeln('• Ton chaleureux et affectueux');
+        break;
+      case 'couple':
+        buffer.writeln('• Ton intime et attentionné');
+        break;
+      default:
+        buffer.writeln('• Ton neutre et respectueux');
+    }
+
+    // Longueur adaptée au contact
+    switch (analysis.contactStyle) {
+      case _ContactStyle.concise:
+        buffer.writeln('• Messages COURTS (< 20 mots)');
+        buffer.writeln('• Style direct, pas de fioritures');
+        break;
+      case _ContactStyle.verbose:
+        buffer.writeln('• Messages plus développés OK');
+        buffer.writeln('• Explications détaillées bienvenues');
+        break;
+      default:
+        buffer.writeln('• Longueur équilibrée (1-2 phrases)');
+    }
+
+    // Ton émotionnel
+    if (analysis.emotionalTone == 'positif') {
+      buffer.writeln('• Maintenir l\'énergie positive');
+    } else if (analysis.emotionalTone == 'négatif') {
+      buffer.writeln('• Ton empathique et compréhensif');
+    }
+
+    return buffer.toString();
+  }
+
+  String _buildEnhancedUserPrompt(
     String mode,
     String currentInput,
     List<Message> messages,
     String currentUserId,
     String currentUserName,
-    _ConversationAnalysis analysis,
+    _EnhancedConversationAnalysis analysis,
   ) {
-    final contextMessages =
-        _buildStructuredContext(messages, currentUserId, currentUserName);
+    final contextMessages = _buildEnhancedContext(
+        messages, currentUserId, currentUserName, analysis);
 
     if (mode == 'suggest') {
       final otherMessages =
           messages.where((m) => m.senderId != currentUserId).toList();
 
       if (otherMessages.isEmpty) {
-        return '''HISTORIQUE:
+        return '''═══════════════════════════════════════
+📜 HISTORIQUE
+═══════════════════════════════════════
 $contextMessages
 
-MISSION:
-Propose un message pour que $currentUserName ${messages.isEmpty ? 'demarre' : 'relance'} cette conversation.''';
+═══════════════════════════════════════
+🎯 MISSION
+═══════════════════════════════════════
+Propose un message pour que $currentUserName ${messages.isEmpty ? 'démarre' : 'relance'} cette conversation.
+${analysis.urgency != 'normal' ? '\n⚠️ Contexte urgent détecté - Adapter le ton' : ''}''';
       }
 
       final lastOther = otherMessages.last;
 
-      return '''HISTORIQUE:
+      return '''═══════════════════════════════════════
+📜 HISTORIQUE (${messages.length} messages)
+═══════════════════════════════════════
 $contextMessages
 
----
+═══════════════════════════════════════
+💬 DERNIER MESSAGE DE ${lastOther.senderName.toUpperCase()}
+═══════════════════════════════════════
+"${lastOther.content}"
 
-DERNIER MESSAGE:
-${lastOther.senderName}: "${lastOther.content}"
-
-MISSION:
-Genere UNE reponse parfaite que $currentUserName peut envoyer a ${lastOther.senderName}.''';
+═══════════════════════════════════════
+🎯 MISSION
+═══════════════════════════════════════
+Génère UNE réponse parfaite que $currentUserName peut envoyer à ${lastOther.senderName}.
+${analysis.pendingQuestions > 0 ? '\n⚠️ ${analysis.pendingQuestions} question(s) attend(ent) une réponse!' : ''}''';
     }
 
-    return '''CONTEXTE:
+    return '''═══════════════════════════════════════
+📜 CONTEXTE
+═══════════════════════════════════════
 $contextMessages
 
----
-
-BROUILLON DE $currentUserName:
+═══════════════════════════════════════
+✏️ BROUILLON DE ${currentUserName.toUpperCase()}
+═══════════════════════════════════════
 "$currentInput"
 
-MISSION:
-Ameliore ce brouillon en gardant le meme sens.''';
+═══════════════════════════════════════
+🎯 MISSION
+═══════════════════════════════════════
+Améliore ce brouillon en gardant le même sens et en l'adaptant au contexte.''';
   }
 
-  String _buildStructuredContext(
-      List<Message> messages, String currentUserId, String currentUserName) {
+  String _buildEnhancedContext(
+    List<Message> messages,
+    String currentUserId,
+    String currentUserName,
+    _EnhancedConversationAnalysis analysis,
+  ) {
     if (messages.isEmpty) return '[Nouvelle conversation]';
 
     final lines = <String>[];
 
-    if (messages.length > 8) {
-      final recentMessages = messages.sublist(messages.length - 6);
-      lines.add('[${messages.length - 6} messages precedents...]');
-      lines.add('');
+    // Garder plus de messages (15-20)
+    final messagesToShow =
+        messages.length > _contextMessageLimit
+            ? messages.sublist(messages.length - _contextMessageLimit)
+            : messages;
 
-      for (var i = 0; i < recentMessages.length; i++) {
-        final msg = recentMessages[i];
-        final isMe = msg.senderId == currentUserId;
-        final prefix = isMe ? '[MOI] $currentUserName' : msg.senderName;
-        lines.add('${i + 1}. $prefix: "${msg.content}"');
-      }
-    } else {
-      for (var i = 0; i < messages.length; i++) {
-        final msg = messages[i];
-        final isMe = msg.senderId == currentUserId;
-        final prefix = isMe ? '[MOI] $currentUserName' : msg.senderName;
-        lines.add('${i + 1}. $prefix: "${msg.content}"');
-      }
+    if (messages.length > _contextMessageLimit) {
+      lines.add('[${messages.length - _contextMessageLimit} messages précédents omis...]');
+      lines.add('');
+    }
+
+    for (var i = 0; i < messagesToShow.length; i++) {
+      final msg = messagesToShow[i];
+      final isMe = msg.senderId == currentUserId;
+      final prefix = isMe ? '[MOI]' : '[${msg.senderName}]';
+
+      // Ajouter l'heure pour le contexte temporel
+      final time =
+          '${msg.timestamp.hour.toString().padLeft(2, '0')}:${msg.timestamp.minute.toString().padLeft(2, '0')}';
+
+      lines.add('$time $prefix: "${msg.content}"');
     }
 
     return lines.join('\n');
   }
 }
 
-/// Classe pour stocker l'analyse de la conversation
-class _ConversationAnalysis {
+// ==========================================
+// CLASSES DE SUPPORT
+// ==========================================
+
+/// Style de communication du contact
+enum _ContactStyle {
+  concise, // Messages courts, directs
+  balanced, // Équilibré
+  verbose, // Messages longs, détaillés
+}
+
+/// Analyse de conversation enrichie
+class _EnhancedConversationAnalysis {
   final String tone;
   final String relationship;
   final List<String> topics;
@@ -594,7 +1027,16 @@ class _ConversationAnalysis {
   final String conversationFlow;
   final String emotionalTone;
 
-  _ConversationAnalysis({
+  // Nouveaux champs
+  final String urgency;
+  final int pendingQuestions;
+  final String responseRhythm;
+  final int averageMessageLength;
+  final String timeOfDay;
+  final List<String> detectedIntentions;
+  final _ContactStyle contactStyle;
+
+  _EnhancedConversationAnalysis({
     required this.tone,
     required this.relationship,
     required this.topics,
@@ -603,12 +1045,19 @@ class _ConversationAnalysis {
     required this.lastSpeaker,
     required this.conversationFlow,
     required this.emotionalTone,
+    required this.urgency,
+    required this.pendingQuestions,
+    required this.responseRhythm,
+    required this.averageMessageLength,
+    required this.timeOfDay,
+    required this.detectedIntentions,
+    required this.contactStyle,
   });
 }
 
 /// Classe pour le cache d'analyse
 class _CachedAnalysis {
-  final _ConversationAnalysis analysis;
+  final dynamic analysis;
   final DateTime timestamp;
 
   _CachedAnalysis(this.analysis, this.timestamp);
